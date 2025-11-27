@@ -1,0 +1,136 @@
+/* ============================================================
+   Orders & Customers Cleanup Script
+   - Inspect orders schema and data
+   - Snapshot raw orders
+   - Clean session_id, order_date, order_total, refund_amount
+   - Check duplicates
+   - Rename order columns
+   - Normalize customer emails
+   - Adjust date fields on customers
+   ============================================================ */
+
+---------------------------------------------------------------
+-- 1. Inspect current orders data and schema
+---------------------------------------------------------------
+SELECT *
+FROM dbo.orders;
+
+EXEC sp_help 'dbo.orders';
+
+
+---------------------------------------------------------------
+-- 2. Snapshot raw orders
+---------------------------------------------------------------
+SELECT *
+INTO orders_raw
+FROM dbo.orders;
+
+
+---------------------------------------------------------------
+-- 3. Clean session_id placeholder values
+---------------------------------------------------------------
+-- Replace 'N/A' with NULL for session_id
+UPDATE dbo.orders
+SET session_id = NULL
+WHERE session_id = 'N/A';
+
+
+---------------------------------------------------------------
+-- 4. Change order_date type (datetime2 → date)
+---------------------------------------------------------------
+-- Change order date column from datetime2 to date type
+ALTER TABLE dbo.orders
+ALTER COLUMN order_date date;
+
+EXEC sp_help 'dbo.orders'; 
+
+
+---------------------------------------------------------------
+-- 5. Enforce DECIMAL on order_total
+---------------------------------------------------------------
+ALTER TABLE dbo.orders
+ALTER COLUMN order_total DECIMAL(10,2);
+
+
+---------------------------------------------------------------
+-- 6. Check duplicate order_ids
+---------------------------------------------------------------
+SELECT *
+FROM dbo.orders
+WHERE order_id IN (
+    SELECT order_id
+    FROM dbo.orders
+    GROUP BY order_id
+    HAVING COUNT(*) > 1
+);
+
+
+---------------------------------------------------------------
+-- 7. Check duplicate customer_ids (using orders table)
+---------------------------------------------------------------
+SELECT *
+FROM dbo.orders
+WHERE order_id IN (
+    SELECT customer_id
+    FROM dbo.orders
+    GROUP BY customer_id
+    HAVING COUNT(*) > 1
+);
+
+
+---------------------------------------------------------------
+-- 8. Rename order_datetime and order_total_net columns
+---------------------------------------------------------------
+EXEC sp_rename 'dbo.orders.order_datetime', 'order_date', 'COLUMN';
+EXEC sp_rename 'dbo.orders.order_total_net', 'order_total', 'COLUMN';
+
+
+---------------------------------------------------------------
+-- 9. Normalize customer emails (lowercase + trim)
+---------------------------------------------------------------
+UPDATE dbo.customers
+SET email = LOWER(LTRIM(RTRIM(email)));
+
+
+---------------------------------------------------------------
+-- 10. Preview cleaned customer emails (pattern-based cleanup)
+---------------------------------------------------------------
+-- Remove wrong characters from emails with 'user###@...' pattern
+SELECT 
+    email AS original_email,
+    LOWER(
+        CASE 
+            WHEN email LIKE 'user%@%' 
+            THEN
+                'user' +
+                -- Get the digits after 'user'
+                CASE 
+                    WHEN PATINDEX('%[^0-9]%', SUBSTRING(email, 5, CHARINDEX('@', email) - 5)) > 0
+                    THEN LEFT(
+                            SUBSTRING(email, 5, CHARINDEX('@', email) - 5),
+                            PATINDEX('%[^0-9]%', SUBSTRING(email, 5, CHARINDEX('@', email) - 5)) - 1
+                         )
+                    ELSE SUBSTRING(email, 5, CHARINDEX('@', email) - 5) 
+                END
+                + SUBSTRING(email, CHARINDEX('@', email), LEN(email))
+            ELSE email
+        END
+    ) AS cleaned_email
+FROM customers;
+
+EXEC sp_help 'dbo.customers';
+
+
+---------------------------------------------------------------
+-- 11. Change created_at and first_order_date to date
+---------------------------------------------------------------
+-- Change created_at from datetime2 to date type
+ALTER TABLE dbo.customers
+ALTER COLUMN created_at date;
+
+-- Change first_order_date from datetime2 to date type
+ALTER TABLE dbo.customers
+ALTER COLUMN first_order_date date;
+
+
+--------------------------------------
