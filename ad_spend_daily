@@ -1,0 +1,174 @@
+/* ============================================================
+   Ad Spend Daily Staging Cleanup Script
+   - Snapshot raw data
+   - Standardize campaign_name
+   - Standardize utm_source_raw (normalize fb/google variants)
+   - Standardize utm_medium_raw (normalize paid_social, paid_search, email)
+   - Inspect distinct values and data types
+   ============================================================ */
+
+---------------------------------------------------------------
+-- 1. Snapshot raw ad spend data
+---------------------------------------------------------------
+SELECT * 
+INTO raw_ad_spend_daily
+FROM dbo.ad_spend_daily_stg;
+
+
+---------------------------------------------------------------
+-- 2. Standardize campaign_name
+---------------------------------------------------------------
+-- Preview cleaning logic: lowercase, replace spaces/hyphens with underscores,
+-- collapse duplicate underscores
+SELECT DISTINCT 
+    campaign_name,
+    LOWER(
+        REPLACE(
+            REPLACE(
+                REPLACE(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(campaign_name,' ','_'), 
+                        '-','_'),
+                    '__','_'),
+                '__','_'),
+            '__','_'),
+        '__','_')
+    ) AS campaign_name_cleaned
+FROM dbo.ad_spend_daily_stg;
+
+-- Apply standardized campaign_name
+UPDATE dbo.ad_spend_daily_stg
+SET campaign_name = LOWER(
+        REPLACE(
+            REPLACE(
+                REPLACE(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(campaign_name,' ','_'), 
+                        '-','_'),
+                    '__','_'),
+                '__','_'),
+            '__','_'),
+        '__','_')
+    );
+
+
+---------------------------------------------------------------
+-- 3. Standardize utm_source_raw
+---------------------------------------------------------------
+-- Inspect distinct UTM sources
+SELECT DISTINCT utm_source_raw
+FROM dbo.ad_spend_daily_stg;
+
+-- Trim + lowercase
+UPDATE dbo.ad_spend_daily_stg
+SET utm_source_raw = LTRIM(RTRIM(LOWER(utm_source_raw)));
+
+-- Check facebook variants lengths
+SELECT utm_source_raw, LEN(utm_source_raw)
+FROM dbo.ad_spend_daily_stg
+WHERE utm_source_raw LIKE '%facebook%';
+
+-- Normalize common typos and variants:
+-- fb → facebook
+-- ggl/googel → google
+-- meta → facebook (depending on your mapping logic)
+-- facebok → facebook
+UPDATE dbo.ad_spend_daily_stg
+SET utm_source_raw = REPLACE(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(utm_source_raw,
+                                            'fb','facebook'),
+                                    'ggl','google'),
+                                'meta','facebook'),
+                            'googel','google'),
+                        'facebok','facebook')
+FROM dbo.ad_spend_daily_stg;
+
+
+---------------------------------------------------------------
+-- 4. Standardize utm_medium_raw
+---------------------------------------------------------------
+-- Trim + lowercase
+UPDATE dbo.ad_spend_daily_stg
+SET utm_medium_raw = LTRIM(RTRIM(LOWER(utm_medium_raw)));
+
+-- Inspect mediums
+SELECT DISTINCT utm_medium_raw
+FROM dbo.ad_spend_daily_stg;
+
+-- Preview normalization logic
+SELECT DISTINCT 
+    utm_medium_raw,
+    LOWER(
+        REPLACE(
+            REPLACE(
+                REPLACE(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(TRIM(utm_medium_raw),' ','_'),
+                        '-','_'),
+                    '__','_'),
+                '__','_'),
+            '__','_'),
+        '__','_')
+    )
+FROM dbo.ad_spend_daily_stg;
+
+-- Apply full cleanup:
+-- remove spaces, hyphens, parentheses, duplicate underscores
+UPDATE dbo.ad_spend_daily_stg
+SET utm_medium_raw = LOWER(
+    REPLACE(
+        REPLACE(
+            REPLACE(
+                REPLACE(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(TRIM(utm_medium_raw), ' ', '_'), 
+                            '-', '_'),
+                        '(', ''),       -- remove (
+                    ')', ''),          -- remove )
+                '__','_'),
+            '__','_'),
+        '__','_'),
+    '__','_')
+);
+
+-- Consolidate medium categories
+UPDATE dbo.ad_spend_daily_stg
+SET utm_medium_raw = 'paid_social'
+WHERE utm_medium_raw = 'social_paid';
+
+UPDATE dbo.ad_spend_daily_stg
+SET utm_medium_raw = 'paid_search'
+WHERE utm_medium_raw = 'ppc' OR utm_medium_raw = 'cpc';
+
+UPDATE dbo.ad_spend_daily_stg
+SET utm_medium_raw = 'email'
+WHERE utm_medium_raw = 'e_mail';
+
+
+---------------------------------------------------------------
+-- 5. Check data types & inspect tables
+---------------------------------------------------------------
+EXEC sp_help 'dbo.ad_spend_daily_stg';
+
+SELECT *
+FROM dbo.ad_spend_daily_stg;
+
+SELECT *
+FROM dbo.orders;
+
+-- (NOTE: DESC is MySQL syntax; SQL Server will error if executed)
+DESC orders;
+
+SELECT *
+FROM dbo.utm_mapping;
+
+SELECT *
+FROM dbo.web_sessions;
